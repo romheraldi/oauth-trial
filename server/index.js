@@ -8,7 +8,7 @@ const jwt = require('jsonwebtoken')
 const jwtSecret =
     '09f26e402586e2faa8da4c98a35f1b20d6b033c6097befa8be3486a829587fe2f90a832bd3ff9d42710a4da095a2ce285b009f0c3730cd9b8e1af3eb84df6611'
 
-app.use(express.urlencoded({ extended: false }))
+app.use(express.urlencoded({ extended: true }))
 app.use(express.json())
 
 const clients = [
@@ -39,19 +39,39 @@ const verifyTokenMiddleware = (req, res, next) => {
     next()
 }
 
+const minifyAndHash = data => {
+    console.log(data)
+    const jsonString = JSON.stringify(data)
+    const minifiedString = jsonString.replace(/\s/g, '') // Remove whitespaces for minification
+    const sha256 = crypto.createHash('sha256').update(minifiedString).digest('hex')
+    return sha256
+}
+
 const authenticateUser = (req, res, next) => {
-    console.log(req.headers)
     const authHeader = req.headers['authorization']
+    const clientSignature = req.headers['x-signature']
+    const timestamp = req.headers['x-timestamp']
+    const relativeUrl = req.originalUrl
+    const method = req.method.toUpperCase()
+
     const token = authHeader && authHeader.split(' ')[1]
 
-    if (token == null) return res.status(401).json({ error: 'Unauthenticated' })
-
+    if (token == null) return res.status(401).json({ error: 'Unauthenticated token not found' })
     jwt.verify(token, jwtSecret, (err, user) => {
-        console.log(err)
+        if (err) return res.status(403).json({ error: 'Unauthenticated Wrong JWT' })
 
-        if (err) return res.status(403).json({ error: 'Unauthenticated' })
+        const stringToSign = `${method}:${relativeUrl}:${token}:${minifyAndHash(req.body)}:${timestamp}`
 
-        req.user = user
+        console.log(stringToSign)
+
+        const client = clients.find(client => client.clientId === user.clientId)
+        const clientSecret = client.clientSecret
+
+        const verify = crypto.createHmac('sha512', clientSecret).update(stringToSign).digest('base64')
+
+        if (verify !== clientSignature) {
+            return res.status(401).json({ error: 'Signature failed' })
+        }
 
         next()
     })
@@ -67,8 +87,8 @@ app.post('/v1.0/access-token/b2b', verifyTokenMiddleware, (req, res) => {
         res.status(401).json({ error: 'Unknown client' })
     }
 
-    delete user.clientSecret
-    const token = jwt.sign(user, jwtSecret, { expiresIn: '900s' })
+    const { clientSecret, ...client } = user
+    const token = jwt.sign(client, jwtSecret, { expiresIn: '900s' })
 
     const responseData = {
         responseCode: '2007300',
@@ -81,9 +101,8 @@ app.post('/v1.0/access-token/b2b', verifyTokenMiddleware, (req, res) => {
     res.json(responseData)
 })
 
-app.get('/protected', authenticateUser, (req, res) => {
-    console.log(req.user)
-    return res.json({ message: 'Protected route' })
+app.post('/protected', authenticateUser, (req, res) => {
+    return res.json(req.body)
 })
 
 app.listen(port, () => {
