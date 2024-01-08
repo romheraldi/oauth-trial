@@ -11,6 +11,13 @@ const getPrivateKey = () => {
     return fs.readFileSync('private-key.pem', 'utf-8')
 }
 
+const minifyAndHash = data => {
+    const jsonString = JSON.stringify(data)
+    const minifiedString = jsonString.replace(/\s/g, '') // Remove whitespaces for minification
+    const sha256 = crypto.createHash('sha256').update(minifiedString).digest('hex')
+    return sha256
+}
+
 app.get('/', async (req, res) => {
     const timeStamp = new Date().toISOString()
     const privateKey = getPrivateKey()
@@ -28,14 +35,36 @@ app.get('/', async (req, res) => {
     axios
         .post('http://localhost:3000/v1.0/access-token/b2b', { grantType: 'client_credentials' }, { headers: headers })
         .then(response => {
+            const getTimeStamp = new Date().toISOString()
+            const secretKey = credential.clientSecret
+            const contentType = 'application/json'
+            const dataBody = {
+                message: 'Hello world!, this is protected route',
+            }
+            const relativeUrl = '/protected'
+            const httpMethod = 'POST'
+            const accessToken = response.data.accessToken
+            const stringToSign = `${httpMethod}:${relativeUrl}:${accessToken}:${minifyAndHash(
+                dataBody
+            )}:${getTimeStamp}`
+
+            console.log(stringToSign)
+
+            const sign = crypto.createHmac('sha512', secretKey).update(stringToSign).digest('base64')
+
             axios
-                .get('http://localhost:3000/protected', {
-                    headers: { authorization: `Bearer ${response.data.accessToken}` },
+                .post('http://localhost:3000/protected', dataBody, {
+                    headers: {
+                        'x-timestamp': getTimeStamp,
+                        'x-signature': sign,
+                        'Content-Type': contentType,
+                        authorization: `Bearer ${response.data.accessToken}`,
+                    },
                 })
                 .then(resGet => res.json(resGet.data))
                 .catch(errGet => res.json(errGet.response.data))
         })
-        .catch(err => res.json(err.response.data))
+        .catch(err => res.json(err.message))
 })
 
 app.listen(port, () => {
