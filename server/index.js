@@ -3,18 +3,17 @@ const app = express()
 const port = 3000
 const crypto = require('crypto')
 const fs = require('fs')
-const oauth2orize = require('oauth2orize')
-const passport = require('passport')
+const jwt = require('jsonwebtoken')
 
-app.use(express.urlencoded({extended: false}))
+const jwtSecret =
+    '09f26e402586e2faa8da4c98a35f1b20d6b033c6097befa8be3486a829587fe2f90a832bd3ff9d42710a4da095a2ce285b009f0c3730cd9b8e1af3eb84df6611'
+
+app.use(express.urlencoded({ extended: false }))
 app.use(express.json())
-app.use(passport.initialize())
-
-const server = oauth2orize.createServer();
 
 const clients = [
-    { id: 1, clientId: '123-456-789', clientSecret: '987-654-321', name: 'John Doe' },
-    { id: 2, clientId: '012-345-678', clientSecret: '876-543-210', name: 'Jane Doe' },
+    { clientId: '123-456-789', clientSecret: '987-654-321', name: 'John Doe' },
+    { clientId: '012-345-678', clientSecret: '876-543-210', name: 'Jane Doe' },
 ]
 
 const getClientPublicKey = () => {
@@ -22,7 +21,6 @@ const getClientPublicKey = () => {
 }
 
 const verifyTokenMiddleware = (req, res, next) => {
-    console.log(req.headers)
     const clientSignature = req.headers['x-signature']
     const clientId = req.headers['x-client-id']
     const timestamp = req.headers['x-timestamp']
@@ -41,15 +39,41 @@ const verifyTokenMiddleware = (req, res, next) => {
     next()
 }
 
+const authenticateUser = (req, res, next) => {
+    console.log(req.headers)
+    const authHeader = req.headers['authorization']
+    const token = authHeader && authHeader.split(' ')[1]
+
+    if (token == null) return res.status(401).json({ error: 'Unauthenticated' })
+
+    jwt.verify(token, jwtSecret, (err, user) => {
+        console.log(err)
+
+        if (err) return res.status(403).json({ error: 'Unauthenticated' })
+
+        req.user = user
+
+        next()
+    })
+}
+
 app.get('/', (req, res) => {
     res.send('Hello world!, this is IKAN server')
 })
 
 app.post('/v1.0/access-token/b2b', verifyTokenMiddleware, (req, res) => {
+    const user = clients.find(client => client.clientId === req.headers['x-client-id'])
+    if (!user) {
+        res.status(401).json({ error: 'Unknown client' })
+    }
+
+    delete user.clientSecret
+    const token = jwt.sign(user, jwtSecret, { expiresIn: '900s' })
+
     const responseData = {
         responseCode: '2007300',
         responseMessage: 'Successful',
-        accessToken: '7t4tbXnlyn4NABRn0FAhB69CRhxghlPPfPK2l9quE29l4D4k5DLH57',
+        accessToken: token,
         tokenType: 'bearer',
         expiresIn: '900',
     }
@@ -57,11 +81,10 @@ app.post('/v1.0/access-token/b2b', verifyTokenMiddleware, (req, res) => {
     res.json(responseData)
 })
 
-app.get('/protected', (req, res) => {
+app.get('/protected', authenticateUser, (req, res) => {
+    console.log(req.user)
     return res.json({ message: 'Protected route' })
 })
-
-server.exchange()
 
 app.listen(port, () => {
     console.log(`Example app listening on port ${port}`)
