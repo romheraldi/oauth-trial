@@ -27,7 +27,14 @@ app.get('/', async (req, res) => {
 
     axios
         .post('http://localhost:3000/v1.0/access-token/b2b', { grantType: 'client_credentials' }, { headers: headers })
-        .then(response => res.json(response.data))
+        .then(response => {
+            axios
+                .get('http://localhost:3000/protected', {
+                    headers: { authorization: `Bearer ${response.data.accessToken}` },
+                })
+                .then(resGet => res.json(resGet.data))
+                .catch(errGet => res.json(errGet.response.data))
+        })
         .catch(err => res.json(err.response.data))
 })
 
